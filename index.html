@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Warehouse Rack Concept - Interactive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f0f0;
+            font-family: 'Inter', sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        .ui-panel {
+            position: absolute;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            pointer-events: auto;
+            border: 1px solid rgba(255,255,255,0.4);
+            backdrop-filter: blur(4px);
+        }
+        #left-panel {
+            top: 20px;
+            left: 20px;
+            max-width: 320px;
+        }
+        #right-panel {
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            transform: translateX(120%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #right-panel.active {
+            transform: translateX(0);
+        }
+        .instruction {
+            font-size: 0.8rem;
+            color: #555;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px dashed #ccc;
+            line-height: 1.6;
+        }
+        /* Custom scrollbar for better look */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body>
+
+    <!-- Left Panel (General Info) -->
+    <div id="left-panel" class="ui-panel">
+        <h1 class="text-xl font-bold text-gray-800 mb-1">3D Rack Management</h1>
+        <p class="text-xs text-gray-500 mb-4">Box Capacity Monitoring System</p>
+        
+        <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-4 rounded-r-md">
+            <p class="text-sm text-gray-700"><strong>Rack 01</strong></p>
+            <p class="text-xs text-gray-600">Capacity: 36 Boxes (18/Shelf)</p>
+        </div>
+
+        <div class="space-y-2">
+            <div class="flex items-center text-sm">
+                <span class="w-4 h-4 rounded-full bg-green-500 mr-2 border border-green-700"></span>
+                <span class="text-gray-700">Full (24 packs)</span>
+            </div>
+            <div class="flex items-center text-sm">
+                <span class="w-4 h-4 rounded-full bg-yellow-400 mr-2 border border-yellow-600"></span>
+                <span class="text-gray-700">Space Available (< 24 packs)</span>
+            </div>
+        </div>
+
+        <div class="instruction">
+            <strong>Camera Controls:</strong><br>
+            🖱️ Left Click + Drag: Rotate (Orbit)<br>
+            🖱️ Right Click + Drag: Pan<br>
+            🖱️ Scroll: Zoom in/out<br><br>
+            <strong>Interaction:</strong><br>
+            👆 Click on any box to view detailed information.
+        </div>
+    </div>
+
+    <!-- Right Panel (Box Details) -->
+    <div id="right-panel" class="ui-panel">
+        <div class="flex justify-between items-start mb-4">
+            <h2 class="text-lg font-bold text-gray-800">Box Details</h2>
+            <button onclick="closePanel()" class="text-gray-400 hover:text-red-500 font-bold px-2">&times;</button>
+        </div>
+        
+        <div id="box-status-banner" class="text-center py-2 rounded font-bold text-sm mb-4 bg-gray-100 text-gray-800">
+            Please select a box
+        </div>
+
+        <div class="space-y-3">
+            <div>
+                <label class="block text-xs font-semibold text-gray-500 uppercase">Box ID</label>
+                <div id="detail-id" class="text-lg font-mono text-gray-900 font-bold">-</div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-500 uppercase">Item Code</label>
+                <div id="detail-item" class="text-sm text-gray-800">-</div>
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-500 uppercase">Expiry Date (EXP)</label>
+                <div id="detail-exp" class="text-sm text-red-600 font-medium">-</div>
+            </div>
+            <div class="pt-2 border-t border-gray-100">
+                <label class="block text-xs font-semibold text-gray-500 uppercase">Total Packs</label>
+                <div class="flex items-baseline mt-1">
+                    <span id="detail-qty" class="text-3xl font-bold text-gray-800">-</span>
+                    <span class="text-sm text-gray-500 ml-1">/ 24</span>
+                </div>
+                
+                <!-- Progress bar -->
+                <div class="w-full bg-gray-200 rounded-full h-2 mt-2">
+                    <div id="qty-progress" class="bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let boxes = []; // Array of box group objects
+        let boxMeshesForRaycaster = []; // Array of meshes to check clicks against
+        
+        // Raycaster for interactions
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let selectedBox = null;
+
+        // Rack configuration
+        const rackWidth = 8.5;
+        const rackDepth = 3;
+        const shelfHeight1 = 1.0; // Lower shelf
+        const shelfHeight2 = 4.0; // Upper shelf
+        
+        // Box layout: 18 per shelf (6 columns x 3 rows)
+        const cols = 6;
+        const rows = 3;
+        const maxBoxes = 36;
+        
+        const boxSizeX = (rackWidth * 0.9) / cols;
+        const boxSizeZ = (rackDepth * 0.9) / rows;
+        const boxSizeY = 1.0; 
+        const gap = 0.08; 
+
+        // Generate Mock Data for 36 boxes
+        const inventoryData = [];
+        for (let i = 1; i <= maxBoxes; i++) {
+            let idString = i.toString().padStart(3, '0');
+            // Randomize quantity. High chance to be 24, some will be lower.
+            let isFull = Math.random() > 0.4; 
+            let qty = isFull ? 24 : Math.floor(Math.random() * 20) + 1;
+            
+            // Randomize month for expiry
+            let expMonth = Math.floor(Math.random() * 12) + 1;
+            let expYear = 2026 + Math.floor(Math.random() * 3);
+            
+            inventoryData.push({
+                id: `BOX-${idString}`,
+                item: `FCCO18CDD${10+i}`,
+                exp: `15/${expMonth}/${expYear}`,
+                qty: qty,
+                max: 24,
+                isFull: qty === 24
+            });
+        }
+
+        init();
+        animate();
+
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xeef2f5);
+            scene.fog = new THREE.FogExp2(0xeef2f5, 0.015);
+
+            // Camera Setup
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(12, 10, 15);
+
+            // Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Controls Setup
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.target.set(0, 3, 0); 
+            controls.maxPolarAngle = Math.PI / 2 - 0.05; // Prevent camera going below ground
+
+            // Lighting Setup
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            dirLight.position.set(15, 25, 15);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.left = -15;
+            dirLight.shadow.camera.right = 15;
+            dirLight.shadow.camera.top = 15;
+            dirLight.shadow.camera.bottom = -15;
+            scene.add(dirLight);
+
+            const fillLight = new THREE.DirectionalLight(0xaaccff, 0.3);
+            fillLight.position.set(-15, 10, -15);
+            scene.add(fillLight);
+
+            // Ground Setup
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            const groundMat = new THREE.MeshStandardMaterial({ 
+                color: 0xd0d5db,
+                roughness: 0.8,
+                metalness: 0.1
+            });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Grid
+            const gridHelper = new THREE.GridHelper(50, 50, 0x999999, 0xcccccc);
+            gridHelper.position.y = 0.01;
+            scene.add(gridHelper);
+
+            // Build Components
+            buildRack();
+            buildBoxes();
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            window.addEventListener('click', onMouseClick, false);
+            
+            // Handle touch for mobile as well
+            window.addEventListener('touchstart', onTouchStart, {passive: false});
+        }
+
+        function buildRack() {
+            // Heavy duty rack colors (Blue pillars, Yellow beams)
+            const pillarMat = new THREE.MeshStandardMaterial({ color: 0x0033a0, roughness: 0.5, metalness: 0.4 });
+            const beamMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, roughness: 0.5, metalness: 0.3 });
+            const shelfMat = new THREE.MeshStandardMaterial({ color: 0xe0cda8, roughness: 0.9 }); // Plywood
+
+            const rackGroup = new THREE.Group();
+
+            // 4 Pillars
+            const pillarGeo = new THREE.BoxGeometry(0.25, 7, 0.25);
+            const positions = [
+                [-rackWidth/2, 3.5, -rackDepth/2], [rackWidth/2, 3.5, -rackDepth/2],
+                [-rackWidth/2, 3.5, rackDepth/2], [rackWidth/2, 3.5, rackDepth/2]
+            ];
+            
+            positions.forEach(pos => {
+                const p = new THREE.Mesh(pillarGeo, pillarMat);
+                p.position.set(...pos);
+                p.castShadow = true;
+                rackGroup.add(p);
+            });
+
+            // Beams and Shelves
+            const beamGeoLong = new THREE.BoxGeometry(rackWidth + 0.25, 0.35, 0.15);
+            const beamGeoShort = new THREE.BoxGeometry(0.15, 0.35, rackDepth + 0.25);
+            const levels = [shelfHeight1, shelfHeight2];
+
+            levels.forEach(y => {
+                // Long Beams (Front/Back)
+                const bFront = new THREE.Mesh(beamGeoLong, beamMat); bFront.position.set(0, y - 0.175, rackDepth/2); bFront.castShadow = true;
+                const bBack = new THREE.Mesh(beamGeoLong, beamMat); bBack.position.set(0, y - 0.175, -rackDepth/2); bBack.castShadow = true;
+                
+                // Short Beams (Sides)
+                const bLeft = new THREE.Mesh(beamGeoShort, beamMat); bLeft.position.set(-rackWidth/2, y - 0.175, 0); bLeft.castShadow = true;
+                const bRight = new THREE.Mesh(beamGeoShort, beamMat); bRight.position.set(rackWidth/2, y - 0.175, 0); bRight.castShadow = true;
+
+                // Shelf Board
+                const shelfGeo = new THREE.BoxGeometry(rackWidth, 0.05, rackDepth);
+                const shelfBoard = new THREE.Mesh(shelfGeo, shelfMat);
+                shelfBoard.position.set(0, y, 0);
+                shelfBoard.receiveShadow = true;
+                shelfBoard.castShadow = true;
+
+                rackGroup.add(bFront, bBack, bLeft, bRight, shelfBoard);
+            });
+
+            scene.add(rackGroup);
+        }
+
+        function buildBoxes() {
+            const boxMat = new THREE.MeshStandardMaterial({ 
+                color: 0xb58e65, // Standard Cardboard brown
+                roughness: 0.9,
+            });
+
+            // Materials for indicators
+            const matFull = new THREE.MeshStandardMaterial({ color: 0x10b981 }); // Green
+            const matPartial = new THREE.MeshStandardMaterial({ color: 0xfacc15 }); // Yellow
+
+            const totalWidth = cols * boxSizeX + (cols - 1) * gap;
+            const totalDepth = rows * boxSizeZ + (rows - 1) * gap;
+            
+            const startX = -totalWidth / 2 + boxSizeX / 2;
+            const startZ = -totalDepth / 2 + boxSizeZ / 2;
+
+            let index = 0;
+
+            // Loop for two shelves
+            [shelfHeight1, shelfHeight2].forEach((shelfY, levelIdx) => {
+                const startY = shelfY + (boxSizeY / 2) + 0.025;
+
+                for (let r = 0; r < rows; r++) {
+                    for (let c = 0; c < cols; c++) {
+                        if (index >= maxBoxes) return;
+
+                        const data = inventoryData[index];
+                        const boxGroup = new THREE.Group();
+                        
+                        // Tag the group with custom data for Raycasting/Logic
+                        boxGroup.userData = {
+                            isBox: true,
+                            data: data,
+                            originalPos: new THREE.Vector3() // To store later
+                        };
+
+                        // 1. Main Box Mesh
+                        const boxGeo = new THREE.BoxGeometry(boxSizeX, boxSizeY, boxSizeZ);
+                        const boxMesh = new THREE.Mesh(boxGeo, boxMat);
+                        boxMesh.castShadow = true;
+                        boxMesh.receiveShadow = true;
+                        boxGroup.add(boxMesh);
+                        boxMeshesForRaycaster.push(boxMesh); // Add mesh to raycaster check
+
+                        // 2. Status Indicator / Label
+                        // A small coloured plate on the top front edge of the box
+                        const indicatorGeo = new THREE.BoxGeometry(boxSizeX * 0.8, 0.05, 0.15);
+                        const indicatorMat = data.isFull ? matFull : matPartial;
+                        const indicator = new THREE.Mesh(indicatorGeo, indicatorMat);
+                        indicator.position.set(0, boxSizeY/2 + 0.02, boxSizeZ/2 - 0.1);
+                        boxGroup.add(indicator);
+
+                        // 3. Simple ID Text Placeholder (Using a small white plane)
+                        const labelGeo = new THREE.PlaneGeometry(0.4, 0.2);
+                        const labelMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                        const label = new THREE.Mesh(labelGeo, labelMat);
+                        label.position.set(0, 0, boxSizeZ/2 + 0.01);
+                        boxGroup.add(label);
+                        boxMeshesForRaycaster.push(label); // Also make label clickable
+
+                        // Position calculation
+                        const xPos = startX + c * (boxSizeX + gap);
+                        const zPos = startZ + r * (boxSizeZ + gap);
+                        
+                        boxGroup.position.set(xPos, startY, zPos);
+                        
+                        // Slight realistic imperfection
+                        boxGroup.position.x += (Math.random() - 0.5) * 0.02;
+                        
+                        // Store original position for animation resets
+                        boxGroup.userData.originalPos.copy(boxGroup.position);
+
+                        scene.add(boxGroup);
+                        boxes.push(boxGroup);
+
+                        index++;
+                    }
+                }
+            });
+        }
+
+        function onTouchStart(event) {
+            if(event.touches.length > 0) {
+                event.clientX = event.touches[0].clientX;
+                event.clientY = event.touches[0].clientY;
+                onMouseClick(event);
+            }
+        }
+
+        function onMouseClick(event) {
+            // Calculate mouse position in normalized device coordinates (-1 to +1)
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Check intersections against the meshes we registered
+            const intersects = raycaster.intersectObjects(boxMeshesForRaycaster);
+
+            if (intersects.length > 0) {
+                // The intersected object is a Mesh (box or label). We need its parent Group.
+                let object = intersects[0].object;
+                while(object.parent && !object.userData.isBox) {
+                    object = object.parent;
+                }
+
+                if (object.userData.isBox) {
+                    selectBox(object);
+                }
+            } else {
+                // Clicked on empty space / ground
+                // Uncomment below if you want click outside to close panel
+                // closePanel();
+            }
+        }
+
+        function selectBox(boxGroup) {
+            if (selectedBox === boxGroup) return; // Already selected
+            
+            selectedBox = boxGroup;
+            const data = boxGroup.userData.data;
+
+            // Update UI
+            document.getElementById('detail-id').innerText = data.id;
+            document.getElementById('detail-item').innerText = data.item;
+            document.getElementById('detail-exp').innerText = data.exp;
+            document.getElementById('detail-qty').innerText = data.qty;
+            
+            // Progress Bar & Status Banner Update
+            const progress = (data.qty / data.max) * 100;
+            const progressBar = document.getElementById('qty-progress');
+            progressBar.style.width = `${progress}%`;
+            
+            const banner = document.getElementById('box-status-banner');
+            if (data.isFull) {
+                banner.innerText = '✔️ BOX FULL';
+                banner.className = 'text-center py-2 rounded font-bold text-sm mb-4 bg-green-100 text-green-800 border border-green-300';
+                progressBar.className = 'bg-green-500 h-2 rounded-full';
+            } else {
+                banner.innerText = '⚠️ SPACE AVAILABLE';
+                banner.className = 'text-center py-2 rounded font-bold text-sm mb-4 bg-yellow-100 text-yellow-800 border border-yellow-300';
+                progressBar.className = 'bg-yellow-500 h-2 rounded-full';
+            }
+
+            // Show Panel
+            document.getElementById('right-panel').classList.add('active');
+        }
+
+        function closePanel() {
+            selectedBox = null;
+            document.getElementById('right-panel').classList.remove('active');
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update(); 
+
+            // Smooth animation for boxes
+            boxes.forEach(boxGroup => {
+                const orig = boxGroup.userData.originalPos;
+                
+                if (boxGroup === selectedBox) {
+                    // Animate Selected Box: Lift up slightly and move forward slightly
+                    // Target: Y + 0.4 (Lift), Z + 0.3 (Pull forward)
+                    const targetY = orig.y + 0.4;
+                    const targetZ = orig.z + 0.3;
+                    
+                    // Lerp towards target
+                    boxGroup.position.y += (targetY - boxGroup.position.y) * 0.1;
+                    boxGroup.position.z += (targetZ - boxGroup.position.z) * 0.1;
+                    
+                    // Add a slight rotation for visual emphasis
+                    boxGroup.rotation.x += (0.05 - boxGroup.rotation.x) * 0.1;
+                } else {
+                    // Return to normal position
+                    boxGroup.position.y += (orig.y - boxGroup.position.y) * 0.15;
+                    boxGroup.position.z += (orig.z - boxGroup.position.z) * 0.15;
+                    boxGroup.rotation.x += (0 - boxGroup.rotation.x) * 0.15;
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
